@@ -31,6 +31,8 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(self.push.accept(1000, self.nonce, self.signature(), self.body).duplicate)
         self.assertTrue(self.push.accept(1000, self.nonce, self.signature(), self.body).duplicate)
         self.assertEqual(len(self.inbox.read()), 1)
+        self.assertEqual(len(self.inbox.read()[0][2]), 1)
+        self.assertEqual(self.inbox.read()[0][2][0]["payload"], {"message": "test"})
         with self.assertRaises(ContractError):
             self.push.accept(1000, self.nonce, self.signature(self.body + b" "), self.body + b" ")
 
