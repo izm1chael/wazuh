@@ -104,6 +104,12 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             Ledger(self.path, other.ledger_scope())
 
+    def test_wrong_delivery_boundary_does_not_advance(self):
+        result = run(self.ledger, Provider([Batch("a", [self.event])]), Sink(),
+                     expected_boundary="local_spool")
+        self.assertEqual(result.status, "delivery_unconfirmed")
+        self.assertIsNone(self.ledger.state()["cursor"])
+
     def test_budget_rejects_unbounded_values(self):
         for budget in (True, 0, 101):
             with self.assertRaises(ContractError):
