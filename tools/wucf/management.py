@@ -191,3 +191,16 @@ class Management:
             updated = self._get(instance, dataset)
             self._audit(updated, actor, "expired_worker_attestation", now, evidence)
             return self._view(updated)
+
+    def check_claim(self, claim, actor, now):
+        """Recheck reservation before lab work; not a fence on an external sink."""
+        identifier(actor)
+        if not isinstance(claim, dict) or claim.get("environment") != self.environment or claim.get("boundary") != "local_spool":
+            raise ContractError("claim scope mismatch")
+        token = fingerprint(claim.get("lease"))
+        with self.tx(now):
+            row = self._get(claim.get("instance"), claim.get("dataset"))
+            if (row["lease"] != token or row["lease_actor"] != actor or row["expiry"] is None
+                    or now >= row["expiry"] or claim.get("expiry") != row["expiry"]
+                    or any(claim.get(k) != v for k, v in self._view(row).items())):
+                raise ContractError("invalid or expired claim")
