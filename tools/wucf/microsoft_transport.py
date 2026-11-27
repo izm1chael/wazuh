@@ -1,4 +1,4 @@
-"""Opt-in public Microsoft cloud transport candidate; no registration or secret store."""
+"""Public Microsoft cloud OAuth token supplier for GraphHTTPS; no secret store."""
 import http.client
 import ipaddress
 import json
@@ -7,7 +7,6 @@ import socket
 import ssl
 from urllib.parse import urlencode
 
-from graph import HOST, PATHS, approved_url
 from ledger import ContractError
 
 LOGIN = "login.microsoftonline.com"
@@ -24,11 +23,13 @@ class TransportError(RuntimeError):
 
 
 def public_ip(host, resolver=socket.getaddrinfo):
-    if host not in {HOST, LOGIN}:
+    if host != LOGIN:
         raise TransportError("unapproved_host")
     try:
         answers = resolver(host, 443, type=socket.SOCK_STREAM)
         if not answers or len(answers) > 32:
+            raise ValueError()
+        if any("%" in answer[4][0] for answer in answers):
             raise ValueError()
         ips = [ipaddress.ip_address(answer[4][0]) for answer in answers]
         if any(not ip.is_global or ip.is_multicast or ip.is_reserved
@@ -44,6 +45,7 @@ class PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self, host, ip, timeout):
         super().__init__(host, 443, timeout=timeout,
                          context=ssl.create_default_context())
+        self._context.minimum_version = ssl.TLSVersion.TLSv1_2
         self.ip = ip
 
     def connect(self):
@@ -56,9 +58,11 @@ class PinnedHTTPS(http.client.HTTPSConnection):
 
 
 def request(host, method, target, headers, body, max_bytes, timeout):
-    if host not in {HOST, LOGIN} or method not in {"GET", "POST"}:
+    if (host != LOGIN or method != "POST" or not isinstance(target, str)
+            or not re.fullmatch(r"/[0-9a-fA-F-]{36}/oauth2/v2\.0/token", target)):
         raise TransportError("unapproved_request")
-    if not 1 <= max_bytes <= 2 * 1024 * 1024 or not 1 <= timeout <= 30:
+    if (type(max_bytes) is not int or not 1 <= max_bytes <= 65536
+            or type(timeout) is not int or not 1 <= timeout <= 30):
         raise TransportError("invalid_transport_budget")
     # Resolve once; connect only to the validated numeric address while retaining
     # the original DNS name for certificate verification and HTTP Host.
@@ -74,8 +78,12 @@ def request(host, method, target, headers, body, max_bytes, timeout):
             raise TransportError("http_rejected", response.status, retry_after)
         if response.getheader("Content-Encoding", "identity").lower() != "identity":
             raise TransportError("unsupported_encoding")
+        length = response.getheader("Content-Length")
+        if length is not None and (not re.fullmatch(r"[0-9]{1,10}", length)
+                                   or int(length) > max_bytes):
+            raise TransportError("response_budget_exceeded")
         raw = response.read(max_bytes + 1)
-        if len(raw) > max_bytes:
+        if len(raw) > max_bytes or (length is not None and len(raw) != int(length)):
             raise TransportError("response_budget_exceeded")
         return raw
     except TransportError:
@@ -86,10 +94,10 @@ def request(host, method, target, headers, body, max_bytes, timeout):
         connection.close()
 
 
-class MicrosoftTransport:
+class MicrosoftTokenSupplier:
     """Trusted operator provisions tenant/client and a scope-bound secret resolver.
 
-    One access token per GET, deliberately no persisted token/cache. DNS and
+    One access token per call, deliberately no persisted token/cache. DNS and
     socket timeouts are not an end-to-end wall clock budget. Production needs
     network-level egress rules, rate controls, encrypted state and qualified
     scoped resolver; this class alone is not a SaaS isolation boundary.
@@ -101,7 +109,7 @@ class MicrosoftTransport:
         self.tenant_id, self.client_id = tenant_id, client_id
         self._resolve_secret, self._http = resolve_secret, http
 
-    def _token(self):
+    def __call__(self):
         try:
             secret = self._resolve_secret()
             if not isinstance(secret, str) or not 1 <= len(secret) <= 4096:
@@ -128,19 +136,3 @@ class MicrosoftTransport:
         except (ValueError, RecursionError):
             raise TransportError("invalid_token_response") from None
 
-    def get(self, url, max_bytes, timeout_seconds):
-        from urllib.parse import urlsplit
-        # Validate exact reviewed Graph paths before resolving any credential.
-        if not isinstance(url, str) or len(url) > 3000:
-            raise ContractError("invalid Graph URL")
-        try:
-            parts = urlsplit(url)
-        except ValueError:
-            raise ContractError("invalid Graph URL") from None
-        if parts.path not in {value[0] for value in PATHS.values()}:
-            raise ContractError("unapproved Graph endpoint")
-        approved_url(url, parts.path)
-        token = self._token()
-        return self._http(HOST, "GET", parts.path + "?" + parts.query,
-                          {"Authorization": "Bearer " + token, "Accept": "application/json"},
-                          None, max_bytes, timeout_seconds)
