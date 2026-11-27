@@ -9,7 +9,8 @@ _STATUSES = {"complete", "idle", "budget_exhausted", "provider_error",
 
 
 def project(source, result, observed_at):
-    if not isinstance(result, RunResult) or result.status not in _STATUSES:
+    if (not isinstance(result, RunResult) or result.status not in _STATUSES
+            or result.boundary not in {"unqualified_adapter", "local_spool"}):
         raise ContractError("invalid run result")
     if (not isinstance(observed_at, datetime) or observed_at.tzinfo is None
             or observed_at.utcoffset() is None):
@@ -37,5 +38,6 @@ def project(source, result, observed_at):
             "state": state, "execution_status": result.status,
             "acknowledged_pages": result.acknowledged_pages,
             "acknowledged_events": result.acknowledged_events,
-            "pending": result.pending, "coverage": "unknown",
+            "pending": result.pending, "delivery_boundary": result.boundary,
+            "coverage": "unknown",
             "native_delivery_qualified": False}
