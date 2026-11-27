@@ -22,6 +22,8 @@ PROFILES = MappingProxyType({
     "workspace_reports": ("google_workspace", "audit", "google_delegated", "local_spool"),
     "m365_feed": ("m365", "audit", "oauth_client", "local_inbox"),
     "aws_cloudtrail": ("aws", "cloudtrail", "aws_role", "local_inbox"),
+    "approved_rest": ("generic", "approved_rest", "reviewed_profile_credential", "local_spool"),
+    "immutable_json_objects": ("generic", "immutable_json_objects", "reviewed_object_identity", "local_inbox"),
     "signed_push": ("generic", "signed_push", "scoped_signing_key", "local_inbox"),
     "remote_relay": ("generic", "remote_relay", "certificate_and_signing_key", "local_inbox"),
 })
