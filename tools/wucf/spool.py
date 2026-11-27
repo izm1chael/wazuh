@@ -73,7 +73,7 @@ class LocalSpool:
             if prior is not None:
                 if prior != (page_id, raw):
                     raise ContractError("conflicting spool generation")
-                return Receipt(page_id, "durable")
+                return Receipt(page_id, "durable", "local_spool")
             count, used, last = self.db.execute(
                 "SELECT COUNT(*),COALESCE(SUM(LENGTH(body)),0),MAX(generation) FROM accepted_pages"
             ).fetchone()
@@ -94,7 +94,7 @@ class LocalSpool:
                 raise ContractError("spool quota exceeded")
             self.db.execute("INSERT INTO accepted_pages VALUES (?,?,?)",
                             (generation, page_id, raw))
-        return Receipt(page_id, "durable")
+        return Receipt(page_id, "durable", "local_spool")
 
     def read(self, after_generation=-1, limit=10):
         """Read bounded retained evidence; no drain or deletion operation."""
