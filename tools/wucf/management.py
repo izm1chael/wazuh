@@ -4,6 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 
 from ledger import ContractError, HEX, identifier
+from runtime import RunResult
 
 MAX_SOURCES = 128
 MAX_AUDIT = 4096
@@ -46,6 +47,11 @@ class Management:
                     seq INTEGER PRIMARY KEY, instance TEXT NOT NULL, dataset TEXT NOT NULL,
                     version INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
                     at INTEGER NOT NULL, evidence TEXT)""")
+                self.db.execute("""CREATE TABLE IF NOT EXISTS run_health (
+                    instance TEXT NOT NULL, dataset TEXT NOT NULL, revision TEXT NOT NULL,
+                    version INTEGER NOT NULL, observed INTEGER NOT NULL, outcome TEXT NOT NULL,
+                    pages INTEGER NOT NULL, events INTEGER NOT NULL, pending INTEGER NOT NULL,
+                    PRIMARY KEY(instance,dataset))""")
         except BaseException:
             self.db.close()
             raise
@@ -158,11 +164,20 @@ class Management:
             return {**self._view(updated), "lease": token, "expiry": now+ttl,
                     "environment": self.environment, "boundary": "local_spool"}
 
-    def finish(self, instance, dataset, token, actor, now, outcome, boundary):
+    def finish(self, instance, dataset, token, actor, now, outcome, boundary, *, result=None):
         """Injected worker outcome, not verified native delivery or a sink fence."""
         fingerprint(token)
         if boundary != "local_spool" or outcome not in {"complete", "idle", "budget_exhausted", "provider_error", "invalid_provider_page", "delivery_unknown", "delivery_unconfirmed"}:
             raise ContractError("invalid outcome")
+        if result is not None and (
+                not isinstance(result, RunResult) or result.status != outcome
+                or result.boundary != boundary or type(result.acknowledged_pages) is not int
+                or not 0 <= result.acknowledged_pages <= 100
+                or type(result.acknowledged_events) is not int
+                or not 0 <= result.acknowledged_events <= 100 * result.acknowledged_pages
+                or type(result.pending) is not bool
+                or result.pending != (outcome in {"delivery_unknown", "delivery_unconfirmed"})):
+            raise ContractError("invalid run health")
         with self.tx(now):
             row = self._get(instance, dataset)
             if (row["lease"] != token or row["lease_actor"] != actor
@@ -175,6 +190,14 @@ class Management:
                             (target, now+delay, instance, dataset))
             updated = self._get(instance, dataset)
             self._audit(updated, actor, outcome, now)
+            if result is None:
+                # Legacy completion has no counters; never reuse old observations.
+                self.db.execute("DELETE FROM run_health WHERE instance=? AND dataset=?", (instance, dataset))
+            else:
+                self.db.execute("""INSERT OR REPLACE INTO run_health
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (instance, dataset, updated["revision"], updated["version"], now,
+                     outcome, result.acknowledged_pages, result.acknowledged_events, int(result.pending)))
             return self._view(updated)
 
     def recover_expired(self, instance, dataset, version, actor, now, evidence):
@@ -204,3 +227,41 @@ class Management:
                     or now >= row["expiry"] or claim.get("expiry") != row["expiry"]
                     or any(claim.get(k) != v for k, v in self._view(row).items())):
                 raise ContractError("invalid or expired claim")
+
+    def health_snapshot(self, now):
+        """Bounded environment-local read; observations are lab-only, not WCS health."""
+        with self.tx():
+            epoch(now)
+            clock = self.db.execute("SELECT clock FROM meta WHERE id=1").fetchone()[0]
+            if now < clock:
+                raise ContractError("clock regression")
+            sources = self.db.execute("SELECT * FROM sources ORDER BY instance,dataset LIMIT ?",
+                                      (MAX_SOURCES + 1,)).fetchall()
+            if len(sources) > MAX_SOURCES:
+                raise ContractError("source capacity exceeded")
+            items = []
+            for row in sources:
+                obs = self.db.execute("SELECT * FROM run_health WHERE instance=? AND dataset=?",
+                                      (row["instance"], row["dataset"])).fetchone()
+                observation = None
+                if obs is not None:
+                    if (obs["revision"] != row["revision"] or obs["version"] > row["version"]
+                            or not 0 <= obs["observed"] <= now):
+                        raise ContractError("invalid observation identity")
+                    observation = {"observed_at": obs["observed"], "completed_version": obs["version"],
+                                   "outcome": obs["outcome"], "acknowledged_pages": obs["pages"],
+                                   "acknowledged_events": obs["events"], "pending": bool(obs["pending"])}
+                if row["lease"] is not None:
+                    status = "expired_claim" if now >= row["expiry"] else "collecting"
+                elif row["state"] != "ready":
+                    status = row["state"]
+                elif observation is None or observation["completed_version"] != row["version"]:
+                    status = "not_observed"
+                elif now > row["due"] + row["interval"]:
+                    status = "overdue"
+                else:
+                    status = "local_observation"
+                items.append({**self._view(row), "status": status, "last_run": observation})
+            return {"schema_version": 1, "environment": self.environment, "observed_at": now,
+                    "delivery_boundary": "local_spool", "coverage": "unknown",
+                    "native_delivery_qualified": False, "sources": items}
