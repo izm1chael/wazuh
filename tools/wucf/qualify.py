@@ -67,10 +67,11 @@ def main():
     match = re.search(r"^Ran ([0-9]+) tests? in ", output, re.MULTILINE)
     count = int(match.group(1)) if match else 0
     # Prevent a successful zero-test discovery from being called qualification.
-    passed = exit_code == 0 and unchanged and count > 0
+    skipped = bool(re.search(r"^OK \(.*(?:skipped|expected failures)=\d+", output, re.MULTILINE))
+    passed = exit_code == 0 and unchanged and count > 0 and not skipped
     receipt = {"schema_version": 1, "qualification": "offline_reference_only",
                "git_head": head, "python": sys.version.split()[0],
-               "test_count": count, "test_exit_code": exit_code,
+               "test_count": count, "test_exit_code": exit_code, "skips_or_expected_failures": skipped,
                "result": "PASS" if passed else "FAIL", "reason": reason,
                "checkout_unchanged": unchanged,
                "duration_seconds": round(time.monotonic() - start, 3),
