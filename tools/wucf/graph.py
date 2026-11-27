@@ -15,6 +15,7 @@ HOST = "graph.microsoft.com"
 PATHS = {"signins": ("/v1.0/auditLogs/signIns", "createdDateTime"),
          "directory_audit": ("/v1.0/auditLogs/directoryAudits", "activityDateTime")}
 MAX_RESPONSE = 2 * MAX_PAGE_BYTES
+MAX_WINDOW_PAGES = 1000
 
 
 def stamp(value):
@@ -50,25 +51,30 @@ def approved_url(url, path):
     return url
 
 
-def position(start, end=None, next_url=None):
+def position(start, end=None, next_url=None, page_count=0):
     return canonical({"start": iso(start), "end": iso(end) if end else None,
-                      "next": next_url}).decode("ascii")
+                      "next": next_url, "page_count": page_count}).decode("ascii")
 
 
 def parse_position(raw, initial, path):
     if raw is None:
-        return initial, None, None
+        return initial, None, None, 0
     try:
         obj = json.loads(raw)
-        if not isinstance(obj, dict) or set(obj) != {"start", "end", "next"}:
+        if not isinstance(obj, dict) or set(obj) != {"start", "end", "next", "page_count"}:
             raise ContractError("invalid Graph position")
         start = stamp(obj["start"])
-        if obj["end"] is None and obj["next"] is None:
-            return start, None, None
+        count = obj["page_count"]
+        if type(count) is not int or not 0 <= count < MAX_WINDOW_PAGES:
+            raise ContractError("Graph window page budget")
+        if obj["end"] is None and obj["next"] is None and count == 0:
+            return start, None, None, 0
+        if count == 0:
+            raise ContractError("invalid Graph continuation count")
         end = stamp(obj["end"])
         if not start < end <= start + timedelta(hours=1):
             raise ContractError("invalid Graph window")
-        return start, end, approved_url(obj["next"], path)
+        return start, end, approved_url(obj["next"], path), count
     except (ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:
         raise ContractError("invalid Graph position") from exc
 
@@ -91,7 +97,7 @@ class GraphProvider:
         self.lag = timedelta(seconds=lag_seconds)
 
     def fetch(self, current):
-        start, end, url = parse_position(current, self.initial, self.path)
+        start, end, url, count = parse_position(current, self.initial, self.path)
         clock = self.now()
         if not isinstance(clock, datetime) or clock.utcoffset() is None:
             raise ContractError("invalid clock")
@@ -131,5 +137,7 @@ class GraphProvider:
             following = approved_url(following, self.path)
             if following == url:
                 raise ContractError("non-progressing Graph pagination")
-            return Batch(position(start, end, following), events, True)
+            if count + 1 >= MAX_WINDOW_PAGES:
+                raise ContractError("Graph window page budget exceeded")
+            return Batch(position(start, end, following, count + 1), events, True)
         return Batch(position(end), events, end < horizon)
