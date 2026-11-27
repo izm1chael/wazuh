@@ -62,6 +62,14 @@ class GraphTests(unittest.TestCase):
             with self.assertRaises(ContractError):
                 graph.fetch(None)
 
+    def test_persistent_window_page_budget(self):
+        from graph import MAX_WINDOW_PAGES
+        graph, transport = self.provider([])
+        current = position(stamp(START), stamp("2026-01-01T01:00:00Z"), URL, MAX_WINDOW_PAGES)
+        with self.assertRaises(ContractError):
+            graph.fetch(current)
+        self.assertEqual(transport.urls, [])
+
     def test_retry_policy(self):
         self.assertEqual(retry(429, 1, NOW, "120").delay_seconds, 120)
         self.assertEqual(retry(503, 3, NOW).delay_seconds, 8)
