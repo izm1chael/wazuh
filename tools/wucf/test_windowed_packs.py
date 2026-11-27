@@ -48,8 +48,8 @@ class PacksTests(unittest.TestCase):
     def test_google_stable_token_and_event(self):
         item = {"id": {"customerId": CUSTOMER, "applicationName": "login",
                        "time": END, "uniqueQualifier": "-123"}, "events": [{"name": "login_success"}]}
-        transport = Transport({"kind": "admin#reports#activities", "items": [item], "nextPageToken": "abc+/"},
-                              {"kind": "admin#reports#activities", "items": [item]})
+        transport = Transport({"kind": "reports#activities", "items": [item], "nextPageToken": "abc+/"},
+                              {"kind": "reports#activities", "items": [item]})
         provider = GoogleWorkspace(CUSTOMER, "login", START, transport, lambda: NOW)
         first = provider.fetch(None)
         final = provider.fetch(first.following)
@@ -58,7 +58,7 @@ class PacksTests(unittest.TestCase):
         self.assertFalse(final.more)
 
     def test_google_scope_and_unknown_response(self):
-        for response in ({}, {"kind": "admin#reports#activities", "items": [{"id": {"customerId": "other"}}]}):
+        for response in ({}, {"kind": "reports#activities", "items": [{"id": {"customerId": "other"}}]}):
             provider = GoogleWorkspace(CUSTOMER, "login", START, Transport(response), lambda: NOW)
             with self.assertRaises(ContractError):
                 provider.fetch(None)
