@@ -43,9 +43,14 @@ def scope(environment, instance, dataset, revision):
 
 def cursor(value):
     # A provider adapter must ensure that opaque positions contain no credentials.
-    if value is not None and (not isinstance(value, str) or not value or
-                              len(value.encode("utf-8", errors="surrogatepass")) > 4096):
-        raise ContractError("invalid cursor")
+    if value is not None:
+        if not isinstance(value, str) or not value:
+            raise ContractError("invalid cursor")
+        try:
+            if len(value.encode("utf-8")) > 4096:
+                raise ContractError("invalid cursor")
+        except UnicodeError as exc:
+            raise ContractError("invalid cursor") from exc
     return value
 
 
@@ -114,6 +119,13 @@ class Ledger:
                               "FROM checkpoint WHERE singleton=1").fetchone()
         if row is None or row[0] != canonical(self.scope):
             raise ContractError("database scope mismatch")
+        if type(row[1]) is not int or not 0 <= row[1] < 2**63:
+            raise ContractError("invalid stored generation")
+        cursor(row[2])
+        if (row[1] == 0) != (row[2] is None) or (row[1] == 0) != (row[5] is None):
+            raise ContractError("inconsistent checkpoint")
+        if row[5] is not None and not HEX.fullmatch(row[5]):
+            raise ContractError("invalid stored receipt")
         if (row[3] is None) != (row[4] is None):
             raise ContractError("inconsistent pending state")
         if row[4] is not None:
