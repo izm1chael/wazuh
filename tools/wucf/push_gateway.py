@@ -91,10 +91,7 @@ class SignedPush:
             event_id = identifier(record["id"])
             events.append({"id": digest(canonical(["push", self.collector, event_id])),
                            "payload": record["payload"]})
-        # Store signed raw body identity as a small internal envelope event,
-        # so the same nonce with changed whitespace or timestamp cannot
-        # silently become an exact retry. This marker is NOT native telemetry.
+        # Bind raw body and timestamp separately from event payloads. Internal
+        # receipt metadata must never be passed to native telemetry.
         delivery = digest(canonical(["push", self.collector, nonce]))
-        marker = {"id": digest(canonical(["push-receipt", self.collector, nonce])),
-                  "payload": {"_wucf_receipt": {"body_sha256": digest(body), "epoch": epoch}}}
-        return self.inbox.accept(delivery, [marker, *events])
+        return self.inbox.accept(delivery, events, identity_digest=digest(payload))
