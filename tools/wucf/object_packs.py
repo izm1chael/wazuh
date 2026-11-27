@@ -9,7 +9,7 @@ import io
 import json
 import re
 from datetime import timedelta
-from urllib.parse import unquote, unquote_plus, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, unquote_plus, urlencode, urlsplit
 
 from delivery_inbox import DeliveryInbox, MAX_UNIT_BYTES, MAX_UNIT_EVENTS
 from graph import iso, stamp
@@ -74,6 +74,34 @@ class Microsoft365Feed:
         # arbitrary query or credentials returned by an untrusted response.
         return f"https://{M365_HOST}{parts.path}?{urlencode({'PublisherIdentifier': self.publisher})}"
 
+    def list_continuation(self, uri, lower, upper):
+        # Microsoft documents both v1.0 and v1 in continuation URLs.
+        legacy = self.list_path.replace("/api/v1.0/", "/api/v1/", 1)
+        path = urlsplit(checked_text(uri, 3000)).path
+        if path not in {self.list_path, legacy}:
+            raise ContractError("unapproved listing continuation")
+        safe_url(uri, M365_HOST, path)
+        try:
+            query = parse_qs(urlsplit(uri).query, strict_parsing=True,
+                             keep_blank_values=True, max_num_fields=5)
+            required = {"contentType", "startTime", "endTime", "nextPage"}
+            if not required <= set(query) <= required | {"PublisherIdentifier"} or any(len(v) != 1 for v in query.values()):
+                raise ContractError("invalid listing continuation parameters")
+            def utc_bound(value):
+                if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+                    value += "T00:00:00Z"
+                return stamp(value)
+            if (query["contentType"][0] != self.content_type
+                    or utc_bound(query["startTime"][0]) != lower
+                    or utc_bound(query["endTime"][0]) != upper
+                    or query.get("PublisherIdentifier", [self.publisher])[0].lower() != self.publisher):
+                raise ContractError("listing continuation scope mismatch")
+            checked_text(query["nextPage"][0], 2048)
+        except (ValueError, UnicodeError) as exc:
+            raise ContractError("invalid listing continuation") from exc
+        query["PublisherIdentifier"] = [self.publisher]
+        return f"https://{M365_HOST}{path}?{urlencode(query, doseq=True)}"
+
     def step(self, start, end, continuation=None):
         lower, upper = stamp(start), stamp(end)
         if not lower < upper <= lower + timedelta(hours=24):
@@ -84,12 +112,12 @@ class Microsoft365Feed:
                                "PublisherIdentifier": self.publisher})
             url = f"https://{M365_HOST}{self.list_path}?{query}"
         else:
-            url = safe_url(continuation, M365_HOST, self.list_path)
+            url = self.list_continuation(continuation, lower, upper)
         # Transport returns body plus the single case-normalized NextPageUri
         # header or None; redirects and duplicate headers must be rejected.
         raw, following = self.transport.list_content(url, max_bytes=MAX_UNIT_BYTES, timeout_seconds=15)
         if following is not None:
-            following = safe_url(following, M365_HOST, self.list_path)
+            following = self.list_continuation(following, lower, upper)
             if following == url:
                 raise ContractError("non-progressing content listing")
         entries = decode_json(raw)
