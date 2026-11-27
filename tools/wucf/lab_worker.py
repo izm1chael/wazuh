@@ -49,5 +49,5 @@ def run_claimed(management, plan, claim, actor, clock, ledger, spool, provider_f
                  expected_boundary="local_spool")
     check()
     management.finish(plan.instance, plan.dataset, claim["lease"], actor, clock(),
-                      result.status, result.boundary)
+                      result.status, result.boundary, result=result)
     return result
