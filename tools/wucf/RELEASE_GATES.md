@@ -36,7 +36,10 @@ two health model source blobs were strict-compiled and six standalone
 Node assertions passed in one continuation session (model
 bd248dfb72e68cd68f35c09dc9b5aebecb172a28, health model
 3a278d4b1650ca1d8b58cb1a753188b03c8bbc54). That was not Jest or EUI
-build execution. Verify all current combined core tests afresh.
+build execution. The scheduler snapshot model at blob
+ed3c8891279f19b756c4190e8bb5f7059e7c6a11 also strict-compiled and passed
+four standalone assertions against the current Management snapshot contract.
+Verify all current combined core tests afresh.
  
 ## Release rule
 
