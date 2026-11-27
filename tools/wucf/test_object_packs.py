@@ -58,6 +58,17 @@ class InboxTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             provider.content_url(f"https://manage.office.com/api/v1.0/{TENANT}/activity/feed/audit/other", "blob")
 
+    def test_m365_continuation_keeps_window_and_content_type(self):
+        from graph import stamp
+        from urllib.parse import urlencode
+        provider = Microsoft365Feed(TENANT, TENANT, "Audit.General", object(), self.inbox)
+        query = {"contentType": "Audit.General", "startTime": START, "endTime": END, "nextPage": "opaque"}
+        url = f"https://manage.office.com/api/v1/{TENANT}/activity/feed/subscriptions/content?"
+        self.assertIn("PublisherIdentifier=", provider.list_continuation(url + urlencode(query), stamp(START), stamp(END)))
+        for changed in ({"contentType": "Audit.Exchange"}, {"endTime": START}, {"PublisherIdentifier": "other"}):
+            with self.assertRaises(ContractError):
+                provider.list_continuation(url + urlencode({**query, **changed}), stamp(START), stamp(END))
+
     def test_queue_delete_only_after_local_durability(self):
         class Objects:
             def get_version(self, bucket, key, version, **kwargs):
