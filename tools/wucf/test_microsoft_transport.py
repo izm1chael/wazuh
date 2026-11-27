@@ -52,13 +52,13 @@ class TransportTests(unittest.TestCase):
         for token in ("bad\r\nAuthorization: evil", "", "x" * 16385):
             def http(*args):
                 return json.dumps({"access_token": token, "token_type":"Bearer"}).encode()
-            transport = MicrosoftTransport(TENANT, CLIENT, lambda: "dummy-secret", http)
+            transport = MicrosoftTokenSupplier(TENANT, CLIENT, lambda: "dummy-secret", http)
             with self.assertRaisesRegex(TransportError, "^invalid_token_response$"):
                 transport()
         def failure():
             raise RuntimeError("dummy-secret")
         with self.assertRaisesRegex(TransportError, "^credential_unavailable$"):
-            MicrosoftTransport(TENANT, CLIENT, failure).get(URL, 1024, 15)
+            MicrosoftTokenSupplier(TENANT, CLIENT, failure)()
 
     @patch("microsoft_transport.PinnedHTTPS")
     @patch("microsoft_transport.public_ip", return_value="8.8.8.8")
