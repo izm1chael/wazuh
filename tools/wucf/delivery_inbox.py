@@ -8,7 +8,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from ledger import ContractError, MAX_EVENT_BYTES, canonical, digest, identifier, scope
+from ledger import ContractError, MAX_EVENT_BYTES, HEX, canonical, digest, identifier, scope
 
 MAX_UNIT_BYTES = 16 * 1024 * 1024
 MAX_UNIT_EVENTS = 10000
@@ -65,6 +65,7 @@ class DeliveryInbox:
                 self.db.execute("""CREATE TABLE IF NOT EXISTS units (
                     seq INTEGER PRIMARY KEY, delivery_id TEXT NOT NULL UNIQUE,
                     sha TEXT NOT NULL, body BLOB NOT NULL, event_count INTEGER NOT NULL)""")
+                self.db.execute("CREATE TABLE IF NOT EXISTS unit_context (delivery_id TEXT PRIMARY KEY, context_sha TEXT NOT NULL)")
                 self.check_scope()
         except BaseException:
             self.db.close()
@@ -78,8 +79,10 @@ class DeliveryInbox:
         if row is None or row[0] != canonical(self.scope):
             raise ContractError("inbox scope mismatch")
 
-    def accept(self, delivery_id, events):
+    def accept(self, delivery_id, events, *, identity_digest=None):
         identifier(delivery_id)
+        if identity_digest is not None and (not isinstance(identity_digest, str) or not HEX.fullmatch(identity_digest)):
+            raise ContractError("invalid delivery context digest")
         raw = validate_events(events)
         sha = digest(raw)
         with self.db:
@@ -87,15 +90,20 @@ class DeliveryInbox:
             self.check_scope()
             row = self.db.execute("SELECT sha,body,event_count FROM units WHERE delivery_id=?",
                                   (delivery_id,)).fetchone()
+            context = self.db.execute("SELECT context_sha FROM unit_context WHERE delivery_id=?", (delivery_id,)).fetchone()
             if row is not None:
-                if row != (sha, raw, len(events)):
+                if row != (sha, raw, len(events)) or context != ((identity_digest,) if identity_digest is not None else None):
                     raise ContractError("delivery identity conflict")
                 return Accepted(delivery_id, sha, len(events), True)
+            if context is not None:
+                raise ContractError("orphaned delivery context")
             count, used = self.db.execute("SELECT COUNT(*),COALESCE(SUM(LENGTH(body)),0) FROM units").fetchone()
             if count >= self.max_units or used + len(raw) > self.max_bytes:
                 raise ContractError("inbox quota exceeded")
             self.db.execute("INSERT INTO units(delivery_id,sha,body,event_count) VALUES (?,?,?,?)",
                             (delivery_id, sha, raw, len(events)))
+            if identity_digest is not None:
+                self.db.execute("INSERT INTO unit_context VALUES (?,?)", (delivery_id, identity_digest))
         return Accepted(delivery_id, sha, len(events), False)
 
     def read(self, after=0, limit=1):
