@@ -32,6 +32,7 @@ class SpoolTests(unittest.TestCase):
         pid, body = self.pending()
         receipt = self.spool.deliver(pid, body)
         self.assertEqual(receipt.durability, "durable")
+        self.assertEqual(receipt.boundary, "local_spool")
         self.spool.close()
         self.spool = LocalSpool(self.path, self.scope, max_pages=1)
         self.assertEqual(self.spool.deliver(pid, body), receipt)
@@ -41,15 +42,15 @@ class SpoolTests(unittest.TestCase):
         self.assertEqual(self.ledger.state()["cursor"], "next")
 
     def test_runtime_retains_raw_page_in_local_spool(self):
-        result = run(self.ledger, Provider(), self.spool)
+        result = run(self.ledger, Provider(), self.spool, expected_boundary="local_spool")
         self.assertEqual(result.status, "complete")
         self.assertEqual(len(self.spool.read()), 1)
 
     def test_quota_blocks_second_page_without_cursor_advance(self):
-        result = run(self.ledger, Provider(), self.spool)
+        result = run(self.ledger, Provider(), self.spool, expected_boundary="local_spool")
         self.assertEqual(result.status, "complete")
         self.ledger.stage(1, "next", "later", [])
-        result = run(self.ledger, Provider(), self.spool)
+        result = run(self.ledger, Provider(), self.spool, expected_boundary="local_spool")
         self.assertEqual(result.status, "delivery_unknown")
         self.assertEqual(self.ledger.state()["cursor"], "next")
         self.assertEqual(len(self.spool.read()), 1)
