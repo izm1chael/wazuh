@@ -169,7 +169,7 @@ class GoogleWorkspace(WindowedProvider):
 
     def extract(self, obj):
         # Google may omit items for an empty page. Require the response kind.
-        if obj.get("kind") != "admin#reports#activities":
+        if obj.get("kind") not in {"reports#activities", "admin#reports#activities"}:
             raise ContractError("unexpected Workspace response")
         return obj.get("items", []), obj.get("nextPageToken")
 
@@ -182,5 +182,10 @@ class GoogleWorkspace(WindowedProvider):
                 or not isinstance(unique, str) or not re.fullmatch(r"-?[0-9]{1,30}", unique)):
             raise ContractError("Workspace identity mismatch")
         when = identity.get("time")
+        if isinstance(when, str) and re.fullmatch(r"[0-9]{1,12}", when):
+            try:
+                when = iso(datetime.fromtimestamp(int(when), tz=timezone.utc))
+            except (ValueError, OverflowError, OSError) as exc:
+                raise ContractError("invalid Workspace timestamp") from exc
         # Normalize time for stable identity if equivalent UTC strings differ.
         return ["workspace", self.customer, self.application, iso(stamp(when)), unique], when
